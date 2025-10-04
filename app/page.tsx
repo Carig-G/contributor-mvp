@@ -72,12 +72,21 @@ export default function Page() {
 
  // Feed
 const [sparks, setSparks] = useState<Spark[]>([]);
+const [view, setView] = useState<"feed" | "mine">("feed");
 
-// ⬇️ REPLACE your current loadSparks() with this:
-async function loadSparks() {
+// helper: map reactions(count) -> likes number for UI
+function withLikes(rows: any[]) {
+  return rows.map((s: any) => ({
+    ...s,
+    likes: s.reactions?.[0]?.count ?? 0,
+  }));
+}
+
+// Feed (all sparks, newest first)
+async function loadFeed() {
   const { data, error } = await sb()
     .from("sparks")
-    .select("*, reactions(count)") // pull reaction counts
+    .select("*, reactions(count)")
     .order("created_at", { ascending: false })
     .limit(50);
 
@@ -85,6 +94,69 @@ async function loadSparks() {
     console.error(error);
     return;
   }
+  setSparks(withLikes(data as any));
+}
+
+// My Conversations (authored OR selected contributor OR followed)
+async function loadMine() {
+  const uid = myUserId;
+  if (!uid) {
+    setSparks([]);
+    return;
+  }
+
+  const client = sb();
+
+  // A) Authored or I'm the selected contributor
+  const part = client
+    .from("sparks")
+    .select("*, reactions(count)")
+    .or(`author_id.eq.${uid},selected_contributor_id.eq.${uid}`)
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  // B) Sparks I follow → get ids, then fetch those sparks
+  const followed = client
+    .from("follows")
+    .select("spark_id")
+    .eq("user_id", uid)
+    .limit(200);
+
+  const [{ data: a, error: e1 }, { data: f, error: e2 }] = await Promise.all([part, followed]);
+  if (e1) console.error(e1);
+  if (e2) console.error(e2);
+
+  const base = withLikes((a || []) as any);
+
+  const followIds = new Set<string>((f || []).map((r: any) => r.spark_id));
+  base.forEach((s: any) => followIds.delete(s.id));
+  const idsToFetch = Array.from(followIds);
+
+  let followedSparks: any[] = [];
+  if (idsToFetch.length) {
+    const { data: bs, error: e3 } = await client
+      .from("sparks")
+      .select("*, reactions(count)")
+      .in("id", idsToFetch);
+    if (!e3 && bs) followedSparks = withLikes(bs as any);
+    if (e3) console.error(e3);
+  }
+
+  const dedup = new Map<string, any>();
+  [...base, ...followedSparks].forEach((s: any) => dedup.set(s.id, s));
+  const merged = Array.from(dedup.values()).sort(
+    (a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+
+  setSparks(merged);
+}
+
+
+useEffect(() => {
+  if (view === "feed") loadFeed();
+  else loadMine();
+}, [session, view]);
+
 
   // reactions(count) returns an array like [{ count: N }]
   const withCounts = (data as any).map((s: any) => ({
@@ -94,8 +166,6 @@ async function loadSparks() {
 
   setSparks(withCounts);
 }
-
-useEffect(() => { loadSparks(); }, [session]); // keep this line
 
 
   // New spark
@@ -200,6 +270,24 @@ async function toggleLike(sparkId: string) {
   ) : (
     <>Not logged in</>
   )}
+</div>
+
+      {/* View toggle */}
+<div className="mx-auto max-w-md px-4 py-2">
+  <div className="flex gap-2">
+    <button
+      className={`rounded-full px-3 py-1 text-sm border ${view === "feed" ? "bg-black text-white dark:bg-white dark:text-black" : "bg-white dark:bg-neutral-900"} border-neutral-200 dark:border-neutral-800`}
+      onClick={() => setView("feed")}
+    >
+      Feed
+    </button>
+    <button
+      className={`rounded-full px-3 py-1 text-sm border ${view === "mine" ? "bg-black text-white dark:bg-white dark:text-black" : "bg-white dark:bg-neutral-900"} border-neutral-200 dark:border-neutral-800`}
+      onClick={() => setView("mine")}
+    >
+      My Conversations
+    </button>
+  </div>
 </div>
 
       {/* Auth (hidden once logged in) */}
