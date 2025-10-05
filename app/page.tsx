@@ -70,32 +70,53 @@ export default function Page() {
     if (session) sb().rpc("ensure_user_row");
   }, [session]);
 
- // Feed
+// Feed
 const [sparks, setSparks] = useState<Spark[]>([]);
+const [view, setView] = useState<"feed" | "mine">("feed");
+const myUserId = session?.user?.id as string | undefined;
 
-// ⬇️ REPLACE your current loadSparks() with this:
-async function loadSparks() {
+// Load Feed (all sparks, newest first)
+async function loadFeed() {
   const { data, error } = await sb()
     .from("sparks")
-    .select("*, reactions(count)") // pull reaction counts
+    .select("*")
     .order("created_at", { ascending: false })
     .limit(50);
 
   if (error) {
-    console.error(error);
+    console.error("loadFeed error:", error);
     return;
   }
 
-  // reactions(count) returns an array like [{ count: N }]
-  const withCounts = (data as any).map((s: any) => ({
-    ...s,
-    likes: s.reactions?.[0]?.count ?? 0, // add a likes number for UI
-  }));
-
-  setSparks(withCounts);
+  setSparks(data as any);
 }
 
-useEffect(() => { loadSparks(); }, [session]); // keep this line
+// Load Mine (only sparks where I'm author or selected contributor)
+async function loadMine() {
+  if (!myUserId) {
+    setSparks([]);
+    return;
+  }
+
+  const { data, error } = await sb()
+    .from("sparks")
+    .select("*")
+    .or(`author_id.eq.${myUserId},selected_contributor_id.eq.${myUserId}`)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("loadMine error:", error);
+    return;
+  }
+
+  setSparks(data as any);
+}
+
+// Choose which loader to run
+useEffect(() => {
+  if (view === "feed") loadFeed();
+  else loadMine();
+}, [session, view]);
 
 
   // New spark
@@ -156,7 +177,6 @@ async function toggleLike(sparkId: string) {
   await loadSparks(); // refresh counts
 }
 
-  const myUserId = session?.user?.id as string | undefined;
   const isParticipant =
   !!selected &&
   !!myUserId &&
@@ -200,6 +220,30 @@ async function toggleLike(sparkId: string) {
   ) : (
     <>Not logged in</>
   )}
+</div>
+<div className="mx-auto max-w-md px-4 py-2">
+  <div className="flex gap-2">
+    <button
+      className={`rounded-full px-3 py-1 text-sm border ${
+        view === "feed"
+          ? "bg-black text-white dark:bg-white dark:text-black"
+          : "bg-white dark:bg-neutral-900"
+      } border-neutral-200 dark:border-neutral-800`}
+      onClick={() => setView("feed")}
+    >
+      Feed
+    </button>
+    <button
+      className={`rounded-full px-3 py-1 text-sm border ${
+        view === "mine"
+          ? "bg-black text-white dark:bg-white dark:text-black"
+          : "bg-white dark:bg-neutral-900"
+      } border-neutral-200 dark:border-neutral-800`}
+      onClick={() => setView("mine")}
+    >
+      My Conversations
+    </button>
+  </div>
 </div>
 
       {/* Auth (hidden once logged in) */}
